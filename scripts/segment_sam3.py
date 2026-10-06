@@ -10,6 +10,7 @@ import argparse
 import json
 import re
 import sys
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -64,7 +65,7 @@ def mask_to_polygon(mask: np.ndarray, cv2_module: Any, width: int, height: int,
 
 def _as_numpy(value: Any) -> np.ndarray:
     if hasattr(value, "detach"):
-        value = value.detach().cpu().numpy()
+        value = value.detach().float().cpu().numpy()
     return np.asarray(value)
 
 
@@ -113,7 +114,13 @@ def run(image_path: Path, output_path: Path, prompts: list[Prompt],
     width, height = image.size
     model = build_sam3_image_model()
     processor = Sam3Processor(model)
-    state = processor.set_image(image)
+    inference_context = (
+        torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+        if hasattr(torch, "autocast") and hasattr(torch, "bfloat16")
+        else nullcontext()
+    )
+    with inference_context:
+        state = processor.set_image(image)
 
     mask_root = output_path.parent / "segmentation" / image_path.stem / "masks"
     mask_root.mkdir(parents=True, exist_ok=True)
@@ -121,7 +128,8 @@ def run(image_path: Path, output_path: Path, prompts: list[Prompt],
     raw_candidates: list[dict[str, Any]] = []
 
     for prompt in prompts:
-        result = processor.set_text_prompt(state=state, prompt=prompt.text)
+        with inference_context:
+            result = processor.set_text_prompt(state=state, prompt=prompt.text)
         masks = _as_numpy(result["masks"])
         boxes = _as_numpy(result["boxes"])
         scores = _as_numpy(result["scores"]).reshape(-1)
