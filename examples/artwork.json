@@ -1,0 +1,18 @@
+{
+  "schema_version": "0.1",
+  "artwork": {
+    "artwork_id": "demo-001",
+    "title": "바닷가의 산책",
+    "artist": "예시 작가",
+    "sources": [
+      {"source_id": "museum:demo-001", "text": "공식 작품 소개: 해변을 걷는 인물과 바다 풍경을 표현한 작품입니다.", "approval": "approved"},
+      {"source_id": "curator:demo-001", "text": "큐레이터 해설: 우산은 인물의 시선을 모으고 수평선은 화면을 안정시킵니다.", "approval": "approved"}
+    ]
+  },
+  "display": {"width": 60, "height": 40},
+  "regions": [
+    {"region_id": "R1", "label": "하늘", "objects": ["하늘"], "polygon": [[0,0],[1,0],[1,0.32],[0,0.32]], "description": "화면 위쪽의 넓은 하늘 영역입니다.", "tactile_priority": 1, "approval": "approved", "relations": [{"relation": "above", "target_region_id": "R2"}]},
+    {"region_id": "R2", "label": "바다", "objects": ["바다", "수평선"], "polygon": [[0,0.32],[1,0.32],[1,0.68],[0,0.68]], "description": "수평선 아래에 펼쳐진 바다 영역입니다.", "tactile_priority": 1, "approval": "approved", "relations": [{"relation": "below", "target_region_id": "R1"}]},
+    {"region_id": "R3", "label": "우산을 쓴 인물", "objects": ["우산", "인물"], "polygon": [[0.38,0.38],[0.62,0.38],[0.66,0.82],[0.34,0.82]], "description": "바닷가 중앙에 우산을 든 인물이 서 있습니다.", "tactile_priority": 5, "approval": "approved", "sensory_profile": {"roughness": {"relative": 0.3, "source_id": "expert:demo-001", "approval": "approved"}}}
+  ]
+}
