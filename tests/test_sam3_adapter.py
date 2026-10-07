@@ -8,15 +8,13 @@ from unittest.mock import patch
 import numpy as np
 from PIL import Image
 
-from scripts.segment_sam3 import DEFAULT_PROMPTS, Prompt, parse_prompts, run
+from scripts.segment_sam3 import Prompt, parse_prompts, run
 from tacgen.pipeline import build, validate_artwork
 
 
 class Sam3AdapterTests(unittest.TestCase):
-    def test_default_prompts_cover_main_sunflower_objects(self):
-        self.assertEqual([p.text for p in DEFAULT_PROMPTS], [
-            "sunflower head", "vase", "plant stem", "plant leaf"
-        ])
+    def test_default_prompt_set_is_empty_for_general_mode(self):
+        self.assertEqual(parse_prompts(None), [])
 
     def test_custom_prompt_format(self):
         prompts = parse_prompts(["yellow sunflower|노란 꽃송이|4"])
@@ -73,7 +71,7 @@ class Sam3AdapterTests(unittest.TestCase):
             source = root / "sunflower.jpeg"
             Image.new("RGB", (10, 10), "yellow").save(source)
             output = root / "artwork.json"
-            payload = run(source, output, [Prompt("flower", "꽃", 3)], 0.2, 1, "test-sam3")
+            payload = run(source, output, [Prompt("flower", "꽃", 3)], 0.2, 1, "test-sam3", mode="concept")
 
             self.assertEqual(len(payload["regions"]), 1)
             validate_artwork(json.loads(output.read_text(encoding="utf-8")))
