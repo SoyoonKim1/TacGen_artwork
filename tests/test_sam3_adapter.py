@@ -8,12 +8,12 @@ from unittest.mock import patch
 import numpy as np
 from PIL import Image
 
-from scripts.segment_sam3 import Prompt, parse_prompts, run
+from scripts.segment_sam3 import Prompt, _spatial_relation_candidates, parse_prompts, run
 from tacgen.pipeline import build, validate_artwork
 
 
 class Sam3AdapterTests(unittest.TestCase):
-    def test_default_prompt_set_is_empty_for_general_mode(self):
+    def test_missing_prompt_set_is_empty(self):
         self.assertEqual(parse_prompts(None), [])
 
     def test_custom_prompt_format(self):
@@ -24,6 +24,19 @@ class Sam3AdapterTests(unittest.TestCase):
     def test_invalid_prompt_is_rejected(self):
         with self.assertRaises(ValueError):
             parse_prompts(["flower head"])
+
+    def test_spatial_relation_candidates_use_mask_geometry(self):
+        regions = [{"region_id": "R01", "relations": []}, {"region_id": "R02", "relations": []}]
+        left = np.zeros((8, 8), dtype=bool)
+        left[2:5, 1:3] = True
+        right = np.zeros((8, 8), dtype=bool)
+        right[2:5, 5:7] = True
+        _spatial_relation_candidates(regions, [left, right])
+
+        self.assertEqual(regions[0]["relations"][0]["relation"], "left_of")
+        self.assertEqual(regions[0]["relations"][0]["target_region_id"], "R02")
+        self.assertEqual(regions[0]["relations"][0]["approval"], "pending")
+        self.assertEqual(regions[1]["relations"][0]["relation"], "right_of")
 
     def test_mocked_inference_exports_valid_artwork_json_and_mask(self):
         torch = types.ModuleType("torch")
@@ -71,7 +84,7 @@ class Sam3AdapterTests(unittest.TestCase):
             source = root / "sunflower.jpeg"
             Image.new("RGB", (10, 10), "yellow").save(source)
             output = root / "artwork.json"
-            payload = run(source, output, [Prompt("flower", "꽃", 3)], 0.2, 1, "test-sam3", mode="concept")
+            payload = run(source, output, [Prompt("flower", "꽃", 3)], 0.2, 1, "test-sam3")
 
             self.assertEqual(len(payload["regions"]), 1)
             validate_artwork(json.loads(output.read_text(encoding="utf-8")))

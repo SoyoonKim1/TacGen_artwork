@@ -1,4 +1,4 @@
-"""Run artwork-agnostic SAM 3 mask proposals or optional concept segmentation.
+"""Run prompt-based SAM 3 segmentation.
 
 SAM 3, PyTorch, OpenCV, and an approved SAM 3 checkpoint must be installed
 separately. This script intentionally keeps those heavyweight imports lazy so
@@ -87,6 +87,54 @@ def _make_overlay(image: Image.Image, regions: list[dict[str, Any]], mask_root: 
     Image.alpha_composite(base, overlay).convert("RGB").save(output_path, quality=95)
 
 
+def _spatial_relation_candidates(regions: list[dict[str, Any]], masks: list[np.ndarray]) -> None:
+    """Attach geometry-only, unreviewed spatial relation candidates to regions."""
+    for region in regions:
+        region["relations"] = []
+    for i, first in enumerate(regions):
+        a = np.asarray(masks[i], dtype=bool)
+        area_a = int(a.sum())
+        if not area_a:
+            continue
+        ay, ax = np.nonzero(a)
+        acx, acy = float(ax.mean()), float(ay.mean())
+        for j, second in enumerate(regions):
+            if i == j:
+                continue
+            b = np.asarray(masks[j], dtype=bool)
+            area_b = int(b.sum())
+            if not area_b:
+                continue
+            by, bx = np.nonzero(b)
+            bcx, bcy = float(bx.mean()), float(by.mean())
+            intersection = int(np.logical_and(a, b).sum())
+            relation: str
+            confidence: float
+            if intersection:
+                coverage_a, coverage_b = intersection / area_a, intersection / area_b
+                if coverage_a >= 0.9 and coverage_b < 0.9:
+                    relation, confidence = "inside", min(coverage_a, 1.0)
+                elif coverage_b >= 0.9 and coverage_a < 0.9:
+                    relation, confidence = "contains", min(coverage_b, 1.0)
+                else:
+                    relation, confidence = "overlaps", min(1.0, intersection / min(area_a, area_b))
+            else:
+                dx, dy = bcx - acx, bcy - acy
+                if abs(dx) >= abs(dy):
+                    relation = "left_of" if dx > 0 else "right_of"
+                else:
+                    relation = "above" if dy > 0 else "below"
+                dominant, minor = max(abs(dx), abs(dy)), min(abs(dx), abs(dy))
+                confidence = 0.5 + 0.5 * ((dominant - minor) / max(dominant + minor, 1.0))
+            first["relations"].append({
+                "relation": relation,
+                "target_region_id": second["region_id"],
+                "confidence": round(float(confidence), 4),
+                "source": "sam3_mask_geometry",
+                "approval": "pending",
+            })
+
+
 def _concept_masks(image: Image.Image, prompts: list[Prompt], model_id: str) -> list[dict[str, Any]]:
     try:
         import torch
@@ -131,28 +179,8 @@ def _concept_masks(image: Image.Image, prompts: list[Prompt], model_id: str) -> 
     return raw_candidates
 
 
-def _automatic_masks(image: Image.Image, model_id: str, points_per_batch: int) -> list[dict[str, Any]]:
-    try:
-        import torch
-        from transformers import pipeline
-    except ImportError as exc:
-        raise RuntimeError("자동 마스크 생성에는 transformers, torch가 필요합니다. `pip install -U transformers accelerate`로 설치하세요.") from exc
-    device = 0 if torch.cuda.is_available() else -1
-    generator = pipeline("mask-generation", model=model_id, device=device)
-    result = generator(image, points_per_batch=points_per_batch)
-    masks = result.get("masks", [])
-    scores = result.get("scores", [])
-    candidates = []
-    for i, value in enumerate(masks):
-        binary = np.asarray(value.convert("L") if isinstance(value, Image.Image) else value).squeeze() > 0
-        candidates.append({"prompt": None, "score": float(scores[i]) if i < len(scores) else None,
-                           "area": int(binary.sum()), "mask": binary, "box": None})
-    return candidates
-
-
 def run(image_path: Path, output_path: Path, prompts: list[Prompt],
         score_threshold: float, min_area_pixels: int, model_id: str,
-        mode: str = "auto", points_per_batch: int = 64,
         title: str | None = None, artist: str | None = None) -> dict[str, Any]:
     try:
         import cv2
@@ -160,17 +188,13 @@ def run(image_path: Path, output_path: Path, prompts: list[Prompt],
         raise RuntimeError("마스크 윤곽선 변환에 opencv-python-headless가 필요합니다.") from exc
     image = Image.open(image_path).convert("RGB")
     width, height = image.size
-    if mode == "auto":
-        raw_candidates = _automatic_masks(image, model_id, points_per_batch)
-    elif mode == "concept":
-        if not prompts:
-            raise ValueError("concept 모드에는 --prompt 또는 --prompts-json이 필요합니다")
-        raw_candidates = _concept_masks(image, prompts, model_id)
-    else:
-        raise ValueError(f"지원하지 않는 모드: {mode}")
+    if not prompts:
+        raise ValueError("SAM 3 실행에는 --prompt 또는 --prompts-json이 필요합니다")
+    raw_candidates = _concept_masks(image, prompts, model_id)
     mask_root = output_path.parent / "segmentation" / image_path.stem / "masks"
     mask_root.mkdir(parents=True, exist_ok=True)
     regions: list[dict[str, Any]] = []
+    region_masks: list[np.ndarray] = []
     for candidate in raw_candidates:
         score = candidate["score"]
         binary = candidate["mask"]
@@ -182,23 +206,26 @@ def run(image_path: Path, output_path: Path, prompts: list[Prompt],
         prompt = candidate["prompt"]
 
         region_id = f"R{len(regions) + 1:02d}"
-        label = prompt.label_ko if prompt else f"미분류 영역 {region_id}"
-        mask_filename = f"{region_id}_{_safe_name(prompt.text if prompt else 'proposal')}.png"
+        label = prompt.label_ko
+        mask_filename = f"{region_id}_{_safe_name(prompt.text)}.png"
         Image.fromarray(binary.astype(np.uint8) * 255, mode="L").save(mask_root / mask_filename)
+        region_masks.append(binary.copy())
         regions.append({
             "region_id": region_id,
             "label": label,
-            "objects": [prompt.label_ko] if prompt else [],
+            "objects": [prompt.label_ko],
             "polygon": polygon,
             "mask_path": f"segmentation/{image_path.stem}/masks/{mask_filename}",
-            "source_prompt": prompt.text if prompt else "automatic-mask-generation",
+            "source_prompt": prompt.text,
             "confidence": round(score, 6) if score is not None else None,
             "area_pixels": candidate["area"],
             "bounding_box_xyxy": candidate["box"],
-            "tactile_priority": prompt.tactile_priority if prompt else 0,
+            "tactile_priority": prompt.tactile_priority,
             "approval": "pending",
             "relations": [],
         })
+
+    _spatial_relation_candidates(regions, region_masks)
 
     payload = {
         "schema_version": "0.2",
@@ -213,11 +240,10 @@ def run(image_path: Path, output_path: Path, prompts: list[Prompt],
         },
         "segmentation": {
             "model": model_id,
-            "mode": mode,
+            "mode": "prompt",
             "prompt_set": [{"text": p.text, "label": p.label_ko, "tactile_priority": p.tactile_priority} for p in prompts],
             "score_threshold": score_threshold,
             "min_area_pixels": min_area_pixels,
-            "points_per_batch": points_per_batch if mode == "auto" else None,
             "status": "needs_curator_review",
         },
         "display": {"width": 60, "height": 40, "coordinate_origin": "top_left"},
@@ -233,12 +259,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="SAM 3으로 작품 영역 후보를 분할해 artwork.json으로 저장")
     parser.add_argument("--image", type=Path, default=Path("data/sunflower.jpeg"))
     parser.add_argument("--output", type=Path, default=Path("data/artwork.json"))
-    parser.add_argument("--mode", choices=["auto", "concept"], default="auto", help="auto는 작품 일반 자동 후보 생성, concept는 개념 프롬프트 기반 분할")
     parser.add_argument("--prompt", action="append", help="영문 프롬프트|한국어 레이블|우선순위 (여러 번 지정 가능)")
     parser.add_argument("--prompts-json", type=Path, help="작품별 프롬프트 설정 JSON (concept 모드)")
     parser.add_argument("--title")
     parser.add_argument("--artist")
-    parser.add_argument("--points-per-batch", type=int, default=64)
     parser.add_argument("--score-threshold", type=float, default=0.25)
     parser.add_argument("--min-area-pixels", type=int, default=32)
     parser.add_argument("--model-id", default="facebook/sam3")
@@ -248,8 +272,11 @@ def main() -> int:
         if args.prompts_json:
             config = json.loads(args.prompts_json.read_text(encoding="utf-8"))
             prompt_values = [f"{item['text']}|{item['label_ko']}|{item.get('tactile_priority', 0)}" for item in config["prompts"]]
-        payload = run(args.image, args.output, parse_prompts(prompt_values), args.score_threshold,
-                      args.min_area_pixels, args.model_id, args.mode, args.points_per_batch, args.title, args.artist)
+        prompts = parse_prompts(prompt_values)
+        if not prompts:
+            raise ValueError("SAM 3 실행에는 --prompt 또는 --prompts-json이 필요합니다")
+        payload = run(args.image, args.output, prompts, args.score_threshold,
+                      args.min_area_pixels, args.model_id, args.title, args.artist)
     except Exception as exc:
         print(f"오류: {exc}", file=sys.stderr)
         return 1

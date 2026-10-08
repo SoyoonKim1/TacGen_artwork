@@ -20,30 +20,28 @@ The included demo annotations are synthetic. A SAM 3 inference adapter is availa
 
 ## SAM 3 segmentation for multiple artworks
 
-The default `auto` mode is artwork-agnostic: it proposes image regions without assuming a subject such as a sunflower. It exports unlabeled regions with `approval: "pending"` to `artwork.json`, binary masks, and an overlay for review. Automatic proposals are shapes, not confirmed object identities; curator review and semantic labeling are still needed. This uses the Hugging Face Transformers mask-generation pipeline documented on the [SAM 3 model card](https://huggingface.co/facebook/sam3). Checkpoint access is gated: request access and authenticate with Hugging Face first.
+SAM 3 runs with text prompts and exports matching regions with `approval: "pending"` to `artwork.json`, binary masks, and an overlay for review. Checkpoint access is gated: request access and authenticate with Hugging Face first.
 
-Install in an environment with Python 3.12+, a compatible PyTorch build, Transformers, and OpenCV:
+Install in an environment with Python 3.12+, a compatible PyTorch build, the official SAM 3 package, and OpenCV:
 
 ```powershell
 conda create -n tacgen-sam3 python=3.12
 conda activate tacgen-sam3
 python -m pip install torch==2.10.0 torchvision --index-url https://download.pytorch.org/whl/cu128
-python -m pip install -U transformers accelerate opencv-python-headless pillow numpy
+python -m pip install -U opencv-python-headless pillow numpy
 hf auth login
 ```
 
-Run generic segmentation on any image (replace paths and optional metadata):
+Run prompt based segmentation on any image. Each prompt uses `English text|Korean label|priority`; repeat `--prompt` to segment several concepts:
 
 ```powershell
-python scripts/segment_sam3.py --image data/sunflower.jpeg --output data/artwork.json --title "해바라기" --artist "빈센트 반 고흐"
+python scripts/segment_sam3.py --image data/sunflower.jpeg --output data/artwork.json --title "해바라기" --artist "빈센트 반 고흐" --prompt "sunflower head|해바라기 꽃송이|5" --prompt "vase|꽃병|3"
 ```
 
-Every artwork uses the same default mode; only the input, output, title, and artist change. Review the generated `<image-stem>_sam3_overlay.png`, then merge, relabel, or discard candidates before approval.
-
-For targeted concept segmentation, provide per-artwork concepts. This optional mode uses the official [SAM 3 repository API](https://github.com/facebookresearch/sam3) and requires its `sam3` package and CUDA setup in addition to checkpoint access. Prompts can be passed inline or stored in JSON as `{"prompts":[{"text":"sunflower head","label_ko":"해바라기 꽃송이","tactile_priority":5}]}`:
+Review the generated `<image-stem>_sam3_overlay.png`, then merge, relabel, or discard candidates before approval. Prompts can also be stored in JSON as `{"prompts":[{"text":"sunflower head","label_ko":"해바라기 꽃송이","tactile_priority":5}]}`:
 
 ```powershell
-python scripts/segment_sam3.py --mode concept --image data/sunflower.jpeg --output data/artwork.json --prompts-json data/sunflower.prompts.json
+python scripts/segment_sam3.py --image data/sunflower.jpeg --output data/artwork.json --prompts-json data/sunflower.prompts.json
 ```
 
-The default auto mode deliberately has no fixed prompt set. `--score-threshold`, `--min-area-pixels`, and `--points-per-batch` tune proposal generation; exported regions remain pending in either mode.
+`--score-threshold` and `--min-area-pixels` filter model results. The command requires at least one prompt. It also adds geometry-based relation candidates (`left_of`, `above`, `overlaps`, `contains`, and related directions) to each region. These are calculated from the masks and marked `approval: "pending"`; review them before treating them as annotations.
