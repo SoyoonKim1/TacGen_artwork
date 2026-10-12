@@ -25,7 +25,7 @@ class PipelineTests(unittest.TestCase):
         response = answer(self.result, "R3", "인물은 어디에 있나요?")
         self.assertEqual(response["highlight_region_id"], "R3")
         self.assertIn("demo-001:R3:description", response["evidence_chunk_ids"])
-        self.assertEqual(response["grounding"], "approved_chunks")
+        self.assertEqual(response["grounding"], "available_chunks")
         self.assertIsNotNone(response["highlight_polygon"])
 
     def test_region_query_excludes_unrelated_region_claims(self):
@@ -35,12 +35,12 @@ class PipelineTests(unittest.TestCase):
         response = answer(result, "R3", "모래는 어디에 있나요?")
         self.assertFalse(any("R4" in chunk_id for chunk_id in response["evidence_chunk_ids"]))
 
-    def test_unapproved_text_is_not_used(self):
+    def test_unapproved_text_is_still_used(self):
         data = copy.deepcopy(self.data)
         data["regions"][0]["approval"] = "unreviewed"
         result = build(data)
         response = answer(result, "R1", "하늘은 어떤가요?")
-        self.assertNotIn("화면 위쪽의 넓은 하늘", response["answer"])
+        self.assertIn("화면 위쪽의 넓은 하늘", response["answer"])
 
     def test_invalid_relation_target_rejected(self):
         data = copy.deepcopy(self.data)

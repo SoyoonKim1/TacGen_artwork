@@ -135,7 +135,7 @@ def answer(result: PrototypeResult, region_id: str | None, question: str) -> dic
     if region_id is not None and region_id not in by_id:
         raise ValueError(f"Unknown region_id: {region_id}")
     tokens = {t.lower() for t in re.findall(r"[\w가-힣]+", question) if len(t) > 1}
-    candidates = [c for c in result.chunks if c["approval"] == "approved" and (region_id is None or not c["region_ids"] or region_id in c["region_ids"])]
+    candidates = [c for c in result.chunks if region_id is None or not c["region_ids"] or region_id in c["region_ids"]]
     def score(chunk: dict[str, Any]) -> tuple[int, int, str]:
         words = {t.lower() for t in re.findall(r"[\w가-힣]+", chunk["text"]) if len(t) > 1}
         exact_region = int(region_id is not None and region_id in chunk["region_ids"])
@@ -146,7 +146,7 @@ def answer(result: PrototypeResult, region_id: str | None, question: str) -> dic
         text = f"{region_name}에 연결된 검토 완료 설명 자료가 아직 없습니다."
     else:
         text = f"{region_name}에 연결된 자료입니다: " + " / ".join(c["text"] for c in selected)
-    return {"region_id": region_id, "question": question, "answer": text, "evidence_chunk_ids": [c["chunk_id"] for c in selected], "highlight_region_id": region_id, "highlight_polygon": by_id[region_id]["polygon"] if region_id else None, "grounding": "approved_chunks" if selected else "no_approved_evidence"}
+    return {"region_id": region_id, "question": question, "answer": text, "evidence_chunk_ids": [c["chunk_id"] for c in selected], "highlight_region_id": region_id, "highlight_polygon": by_id[region_id]["polygon"] if region_id else None, "grounding": "available_chunks" if selected else "no_evidence"}
 
 
 def export(result: PrototypeResult, path: str | Path) -> None:
